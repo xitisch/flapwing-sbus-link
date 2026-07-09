@@ -22,21 +22,37 @@ import serial.tools.list_ports
 import time
 
 BAUD_RATE = 115200
+TEST_STEP_MS = 8000
+TEST_BREAK_MS = 5000
+TEST_START_MS = 5000
+TEST_BREAK_VALUES = {"ch3": 1000, "ch1": 1500, "ch2": 1500}
 
+# Wireless test plan:
+# 1. Arm CH8 and hold throttle at 1000 for 5 seconds.
+# 2. Sweep throttle through 1200, 1600, and 2000 for 8 seconds each.
+# 3. Sweep yaw through 1000, 1500, and 2000, with throttle 1200 and pitch 1500.
+# 4. Sweep pitch through 1000, 1500, and 2000, with throttle 1200 and yaw 1500.
+# A 5-second neutral break is inserted between each 8-second setting.
 # Wireless test steps: (status text, duration in ms, channel values to update)
 WIRELESS_TEST_STEPS = (
-    ("Throttle armed; throttle 1000", 5000, {"ch8": 2000, "ch3": 1000}),
-    ("Throttle 1200", 3000, {"ch3": 1200}),
-    ("Throttle 1600", 3000, {"ch3": 1600}),
-    ("Throttle 2000", 3000, {"ch3": 2000}),
-    ("Neutral break before yaw", 3000, {"ch3": 1000, "ch1": 1500, "ch2": 1500}),
-    ("Yaw 1000", 3000, {"ch1": 1000}),
-    ("Yaw 1500", 3000, {"ch1": 1500}),
-    ("Yaw 2000", 3000, {"ch1": 2000}),
-    ("Neutral break before pitch", 3000, {"ch3": 1000, "ch1": 1500, "ch2": 1500}),
-    ("Pitch 1000", 3000, {"ch2": 1000}),
-    ("Pitch 1500", 3000, {"ch2": 1500}),
-    ("Pitch 2000", 3000, {"ch2": 2000}),
+    ("Throttle armed; throttle 1000", TEST_START_MS, {"ch8": 2000, "ch3": 1000, "ch1": 1500, "ch2": 1500}),
+    ("Throttle 1200", TEST_STEP_MS, {"ch8": 2000, "ch3": 1200, "ch1": 1500, "ch2": 1500}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1600", TEST_STEP_MS, {"ch3": 1600}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 2000", TEST_STEP_MS, {"ch3": 2000}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1200; yaw 1000", TEST_STEP_MS, {"ch3": 1200, "ch1": 1000}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1200; yaw 1500", TEST_STEP_MS, {"ch3": 1200, "ch1": 1500}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1200; yaw 2000", TEST_STEP_MS, {"ch3": 1200, "ch1": 2000}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1200; pitch 1000", TEST_STEP_MS, {"ch3": 1200, "ch2": 1000}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1200; pitch 1500", TEST_STEP_MS, {"ch3": 1200, "ch2": 1500}),
+    ("Neutral break", TEST_BREAK_MS, TEST_BREAK_VALUES),
+    ("Throttle 1200; pitch 2000", TEST_STEP_MS, {"ch3": 1200, "ch2": 2000}),
 )
 
 # Safe/neutral values restored after the wireless test completes
