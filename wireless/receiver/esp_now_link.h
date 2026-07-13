@@ -22,6 +22,9 @@ typedef struct __attribute__((packed)) {
   uint16_t ch[16];
 } SbusPacket;
 
+// Both ESP-NOW nodes must use the same 2.4 GHz Wi-Fi channel.
+static const uint8_t ESPNOW_WIFI_CHANNEL = 1;
+
 // If no packet is received within this window the receiver engages failsafe.
 static const uint32_t LINK_TIMEOUT_MS = 500;
 

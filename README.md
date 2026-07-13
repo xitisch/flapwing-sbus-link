@@ -6,12 +6,12 @@ variants of the link:
 
 - **`wired/`** — the original single-board bridge. The PC talks to one ESP32
   over USB serial, and that ESP32 outputs SBUS directly to the robot.
-- **`wireless/`** — a two-board ESP-NOW link. The PC talks to a transmitter
-  ESP32, which relays the channels wirelessly to a receiver ESP32 on the robot
-  that outputs the SBUS signal.
+- **`wireless/`** — a two-board ESP-NOW link. The PC talks to an ESP32
+  transmitter, which relays the channels wirelessly to an ESP32-C3 SuperMini
+  receiver on the robot that outputs the SBUS signal.
 
 Both variants speak the same host protocol, so `gui.py` is functionally
-identical in each: it just sends `<CH1,CH2,CH3,CH5,CH6>` over USB serial.
+identical in each: it sends `<CH1,CH2,CH3,CH5,CH6,CH8>` over USB serial.
 
 ```
             wired/                                 wireless/
@@ -19,8 +19,8 @@ identical in each: it just sends `<CH1,CH2,CH3,CH5,CH6>` over USB serial.
  PC (gui.py)                            PC (gui.py)
     │ USB serial <CH1,..>                  │ USB serial <CH1,..>
     ▼                                      ▼
- ESP32 ──SBUS──▶ robot          ESP32 transmitter ──ESP-NOW──▶ ESP32 receiver
-                                                                   │ SBUS
+ ESP32 ──SBUS──▶ robot          ESP32 transmitter ──ESP-NOW──▶ ESP32-C3 receiver
+                                                                   │ SBUS (GPIO4)
                                                                    ▼
                                                                  robot
 ```
@@ -35,11 +35,13 @@ identical in each: it just sends `<CH1,CH2,CH3,CH5,CH6>` over USB serial.
 ├── wireless/
 │   ├── transmitter/
 │   │   ├── transmitter.ino       # USB serial -> ESP-NOW   (PC-tethered node)
-│   │   └── esp_now_link.h        # shared ESP-NOW payload definition
+│   │   ├── esp_now_link.h        # shared ESP-NOW payload definition
+│   │   └── platformio.ini        # optional DevKitV1 transmitter build
 │   ├── receiver/
 │   │   ├── receiver.ino          # ESP-NOW -> SBUS output  (robot node)
 │   │   └── esp_now_link.h        # identical copy of the payload definition
 │   └── gui.py                    # Tkinter slider GUI (same as wired/gui.py)
+├── platformio.ini              # reproducible ESP32-C3 receiver build
 ├── README.md
 └── .gitignore
 ```
@@ -57,10 +59,10 @@ identical in each: it just sends `<CH1,CH2,CH3,CH5,CH6>` over USB serial.
 | 3          | 2          | CH3     | Throttle            | 1000 (min)   |
 | 4          | 4          | CH5     | Trim 1              | 1500         |
 | 5          | 5          | CH6     | Trim 2              | 1500         |
-| —          | 7          | CH8     | Throttle lock / arm | 1800 (armed) |
+| 6          | 7          | CH8     | Throttle lock / arm | 1000 (locked) |
 
-All values are in microseconds, range `[1000, 2000]`. CH8 is set in firmware and
-is not exposed in the GUI.
+All values are in microseconds, range `[1000, 2000]`. CH8 is controlled by the
+GUI's throttle-lock toggle and starts locked/disarmed.
 
 ## Common setup
 
@@ -68,8 +70,9 @@ is not exposed in the GUI.
   **bolderflight/sbus** library (Library Manager). `esp_now` and `WiFi` ship
   with the ESP32 core.
 - `pip install pyserial` for the GUI.
-- SBUS output is on **GPIO17 (TX)**, inverted, 100kbaud / 8E2 — wire it to the
-  flight controller's SBUS input with a common ground.
+- SBUS is inverted, 100kbaud / 8E2. The wired firmware outputs it on
+  **GPIO17**; the wireless ESP32-C3 receiver outputs it on **GPIO4**. Always
+  connect the MCU and flight-controller grounds.
 
 ---
 
@@ -91,20 +94,61 @@ channel; moving a slider sends a packet that the ESP32 converts straight to SBUS
 
 ## Wireless variant (`wireless/`)
 
-Two ESP32s linked over ESP-NOW. Hardware: 2× ESP32 dev boards, SBUS from the
-**receiver** node to the robot, USB from the PC to the **transmitter** node.
+Two boards linked over ESP-NOW: an ESP32 DevKitV1 transmitter connected to the
+PC and an ESP32-C3 SuperMini receiver mounted on the robot. The ESP-NOW payload
+is unchanged, so the two different ESP32 chips remain wirelessly compatible.
+
+### Receiver wiring
+
+| ESP32-C3 SuperMini | Flight controller |
+|--------------------|-------------------|
+| GPIO4              | SBUS input        |
+| GND                | GND               |
+
+GPIO4 is driven directly as an inverted 3.3 V SBUS signal. Do not use the old
+DevKitV1 GPIO17 wiring with the SuperMini; GPIO17 is not exposed for this use on
+the C3 board.
 
 ### Build & flash (Arduino IDE)
 
-1. Open `wireless/receiver/receiver.ino`, select your ESP32 board, and flash the
-   **robot** node. Open the Serial Monitor at 115200 baud and note the
-   `Receiver MAC` it prints on boot.
-2. (Optional but recommended) In `wireless/transmitter/transmitter.ino`, set
-   `RECEIVER_MAC` to that address to pin the link to one receiver. Left at the
-   default broadcast address, the link still works without any MAC setup.
-3. Open `wireless/transmitter/transmitter.ino`, select the board, and flash the
-   **PC-tethered** node. Close the Serial Monitor afterward so the GUI can claim
-   the port.
+1. Install the Espressif **ESP32 Arduino core** and **Bolder Flight Systems
+   SBUS 8.1.4** from Library Manager.
+2. Open `wireless/receiver/receiver.ino`. Select **Nologo ESP32C3 Super Mini**
+   if your installed core provides it; otherwise select **ESP32C3 Dev Module**.
+   Set **USB CDC On Boot** to **Enabled**, then flash the receiver.
+3. Open the receiver's Serial Monitor at 115200 baud. It should print
+   `Receiver MAC`, `SBUS output: GPIO4`, and `ESP-NOW receiver ready`.
+4. The transmitter now uses the broadcast address by default, so it works with
+   the new C3 without editing a MAC. To restrict it to one receiver, replace
+   `RECEIVER_MAC` in `wireless/transmitter/transmitter.ino` with the address
+   printed in step 3.
+5. Open `wireless/transmitter/transmitter.ino`, select **DOIT ESP32 DEVKIT V1**,
+   and flash the PC-tethered node. Close its Serial Monitor afterward so the GUI
+   can claim the port.
+
+If a SuperMini upload does not start, hold **BOOT**, tap **RESET**, begin the
+upload, and release **BOOT** when the IDE starts connecting.
+
+### Build & flash (PlatformIO)
+
+The checked-in `platformio.ini` uses the generic 4 MB ESP32-C3 target, enables
+native USB CDC, pins the toolchain, and installs the SBUS library automatically:
+
+```bash
+python -m pip install platformio
+python -m platformio run
+python -m platformio run --target upload --upload-port COMx
+python -m platformio device monitor --baud 115200 --port COMx
+```
+
+Replace `COMx` with the SuperMini's port. PlatformIO's generic
+`esp32-c3-devkitm-1` target is intentional; its official registry does not have
+a separate SuperMini board definition. The root project builds the C3 receiver.
+To compile the DevKitV1 transmitter too, run its nested PlatformIO project:
+
+```bash
+python -m platformio run --project-dir wireless/transmitter
+```
 
 ### Run the GUI
 
@@ -115,6 +159,9 @@ python wireless/gui.py
 The GUI auto-detects the transmitter's USB-serial port (prompting if several
 candidates are found) and exposes a slider per channel. Moving a slider sends a
 packet to the transmitter, which forwards it over ESP-NOW.
+
+Both nodes explicitly use Wi-Fi channel 1. If you change
+`ESPNOW_WIFI_CHANNEL`, update both copies of `esp_now_link.h`.
 
 ### Failsafe
 

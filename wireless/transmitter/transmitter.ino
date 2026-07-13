@@ -10,7 +10,7 @@
  * Link:   host --(USB serial)--> transmitter --(ESP-NOW)--> receiver
  *
  * Serial packet format (host -> ESP32):
- *   <CH1,CH2,CH3,CH5,CH6>
+ *   <CH1,CH2,CH3,CH5,CH6,CH8>
  *   All values in the range [1000, 2000] microseconds.
  *
  * ESP-NOW payload: SbusPacket (see esp_now_link.h), 16 channel values.
@@ -23,13 +23,13 @@
  */
 
 #include <esp_now.h>
+#include <esp_wifi.h>
 #include <WiFi.h>
 #include "esp_now_link.h"
-#include <esp_mac.h>
 
 // Destination MAC. Broadcast by default; replace with the receiver's MAC
 // (printed over serial when the receiver boots) to pin the link.
-uint8_t RECEIVER_MAC[6] = {0x28, 0x05, 0xA5, 0x31, 0xC2, 0x98};
+uint8_t RECEIVER_MAC[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
 
 // Resend the latest channel values at least this often (ms) so the receiver's
 // failsafe stays satisfied even when the host sends no updates.
@@ -61,15 +61,21 @@ void setup() {
   userChannels[2] = 1000;  // CH3: throttle (minimum - do not arm at neutral)
   userChannels[4] = 1500;  // CH5: trim 1   (neutral)
   userChannels[5] = 1500;  // CH6: trim 2   (neutral)
-  userChannels[7] = 1800;  // CH8: throttle lock (armed position)
+  userChannels[7] = 1000;  // CH8: throttle lock (locked / disarmed)
 
   // ESP-NOW runs on Wi-Fi in station mode, disconnected from any AP
   WiFi.mode(WIFI_STA);
   WiFi.disconnect();
-  uint8_t mac[6];
-  esp_read_mac(mac, ESP_MAC_WIFI_STA);
-  Serial.printf("Transmitter MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
-                mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  if (esp_wifi_set_channel(ESPNOW_WIFI_CHANNEL, WIFI_SECOND_CHAN_NONE) != ESP_OK) {
+    Serial.println("Unable to set ESP-NOW Wi-Fi channel");
+  }
+  uint8_t mac[6] = {};
+  if (esp_wifi_get_mac(WIFI_IF_STA, mac) == ESP_OK) {
+    Serial.printf("Transmitter MAC: %02X:%02X:%02X:%02X:%02X:%02X\n",
+                  mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+  } else {
+    Serial.println("Unable to read transmitter MAC");
+  }
 
   if (esp_now_init() != ESP_OK) {
     Serial.println("ESP-NOW init failed");
@@ -79,7 +85,7 @@ void setup() {
   // Register the receiver (or broadcast address) as a peer
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, RECEIVER_MAC, 6);
-  peer.channel = 0;       // use the current Wi-Fi channel
+  peer.channel = ESPNOW_WIFI_CHANNEL;
   peer.encrypt = false;
   if (esp_now_add_peer(&peer) != ESP_OK) {
     Serial.println("Failed to add ESP-NOW peer");
