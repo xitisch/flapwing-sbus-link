@@ -27,6 +27,15 @@
 static constexpr int8_t SBUS_TX_PIN = 4;
 bfs::SbusTx sbus(&Serial1, -1, SBUS_TX_PIN, true);
 
+// ==================== RECEIVER VALUE TEST ====================
+// Comment out the next line after testing to disable continuous test output.
+#define RECEIVER_VALUE_TEST
+
+#ifdef RECEIVER_VALUE_TEST
+static constexpr uint32_t RECEIVER_VALUE_TEST_INTERVAL_MS = 250;
+#endif
+// ================== END RECEIVER VALUE TEST ==================
+
 // ESP-NOW changed its receive callback's first parameter in Arduino-ESP32 3.x.
 // A single version-selected alias also keeps Arduino's .ino prototype generator
 // from exposing the 3.x-only type when PlatformIO builds with core 2.x.
@@ -73,6 +82,8 @@ void onDataRecv(const EspNowRecvInfo *, const uint8_t *data, int len) {
 
 void setup() {
   Serial.begin(115200);
+  delay(2000);
+  Serial.println("Receiver booted");
 
   // Configures UART1 for 100kbaud, 8E2, and inverted output on SBUS_TX_PIN.
   sbus.Begin();
@@ -112,10 +123,26 @@ void loop() {
     Serial.println("Link lost - failsafe engaged");
   }
 
-  // Debug: print channels when a new packet arrives and a value changed
+  // Debug: handle a newly received ESP-NOW packet.
   if (packetReceived) {
     packetReceived = false;
 
+// ==================== RECEIVER VALUE TEST ====================
+#ifdef RECEIVER_VALUE_TEST
+    // Print the latest received values at 4 Hz. Printing from loop() keeps
+    // serial I/O out of the high-priority ESP-NOW receive callback.
+    static uint32_t lastTestPrintMs = 0;
+    if (millis() - lastTestPrintMs >= RECEIVER_VALUE_TEST_INTERVAL_MS) {
+      lastTestPrintMs = millis();
+      Serial.print("[RECEIVER TEST] CH1="); Serial.print(userChannels[0]);
+      Serial.print(" CH2=");               Serial.print(userChannels[1]);
+      Serial.print(" CH3=");               Serial.print(userChannels[2]);
+      Serial.print(" CH5=");               Serial.print(userChannels[4]);
+      Serial.print(" CH6=");               Serial.print(userChannels[5]);
+      Serial.print(" CH8=");               Serial.println(userChannels[7]);
+    }
+#else
+    // Normal debug behavior: print only when one of the used channels changes.
     static uint16_t lastPrinted[16] = {0};
     int dbg[] = {0, 1, 2, 4, 5, 7};  // CH1,CH2,CH3,CH5,CH6,CH8
     bool changed = false;
@@ -131,6 +158,8 @@ void loop() {
       Serial.print("  thr_lock(CH8):"); Serial.println(userChannels[7]);
       for (int k = 0; k < 6; k++) lastPrinted[dbg[k]] = userChannels[dbg[k]];
     }
+#endif
+// ================== END RECEIVER VALUE TEST ==================
   }
 
   // Build and send the SBUS frame
