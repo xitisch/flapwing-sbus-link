@@ -36,12 +36,12 @@ identical in each: it sends `<CH1,CH2,CH3,CH5,CH6,CH8>` over USB serial.
 │   ├── transmitter/
 │   │   ├── transmitter.ino       # USB serial -> ESP-NOW   (PC-tethered node)
 │   │   ├── esp_now_link.h        # shared ESP-NOW payload definition
-│   │   └── platformio.ini        # optional DevKitV1 transmitter build
+│   │   └── platformio.ini        # DevKitV1 transmitter build
 │   ├── receiver/
 │   │   ├── receiver.ino          # ESP-NOW -> SBUS output  (robot node)
-│   │   └── esp_now_link.h        # identical copy of the payload definition
+│   │   ├── esp_now_link.h        # identical copy of the payload definition
+│   │   └── platformio.ini        # ESP32-C3 SuperMini receiver build
 │   └── gui.py                    # Tkinter slider GUI (same as wired/gui.py)
-├── platformio.ini              # reproducible ESP32-C3 receiver build
 ├── README.md
 └── .gitignore
 ```
@@ -131,23 +131,29 @@ upload, and release **BOOT** when the IDE starts connecting.
 
 ### Build & flash (PlatformIO)
 
-The checked-in `platformio.ini` uses the generic 4 MB ESP32-C3 target, enables
-native USB CDC, pins the toolchain, and installs the SBUS library automatically:
+Each wireless node is an independent PlatformIO project. The receiver project
+uses the generic 4 MB ESP32-C3 target, enables native USB CDC, pins the
+toolchain, and installs the SBUS library automatically.
+
+Build, upload, and monitor the ESP32-C3 SuperMini receiver:
 
 ```bash
 python -m pip install platformio
-python -m platformio run
-python -m platformio run --target upload --upload-port COMx
-python -m platformio device monitor --baud 115200 --port COMx
+python -m platformio run --project-dir wireless/receiver
+python -m platformio run --project-dir wireless/receiver --target upload --upload-port COMx
+python -m platformio device monitor --project-dir wireless/receiver --baud 115200 --port COMx
 ```
 
 Replace `COMx` with the SuperMini's port. PlatformIO's generic
 `esp32-c3-devkitm-1` target is intentional; its official registry does not have
-a separate SuperMini board definition. The root project builds the C3 receiver.
-To compile the DevKitV1 transmitter too, run its nested PlatformIO project:
+a separate SuperMini board definition.
+
+Build the DevKitV1 transmitter from its own project:
 
 ```bash
 python -m platformio run --project-dir wireless/transmitter
+python -m platformio run --project-dir wireless/transmitter --target upload --upload-port COMx
+python -m platformio device monitor --project-dir wireless/transmitter --baud 115200 --port COMx
 ```
 
 ### Run the GUI
@@ -158,14 +164,26 @@ python wireless/gui.py
 
 The GUI auto-detects the transmitter's USB-serial port (prompting if several
 candidates are found) and exposes a slider per channel. Moving a slider sends a
-packet to the transmitter, which forwards it over ESP-NOW.
+packet to the transmitter, which forwards it over ESP-NOW. The automated
+wireless benchmark ramps CH3 at 250 channel units per second; ordinary manual
+slider changes remain immediate. While the benchmark runs, its button becomes
+an immediate stop button that locks CH8.
 
 Both nodes explicitly use Wi-Fi channel 1. If you change
 `ESPNOW_WIFI_CHANNEL`, update both copies of `esp_now_link.h`.
 
 ### Failsafe
 
-The transmitter resends the latest channel values every ~50 ms (heartbeat). If
-the receiver hears nothing for `LINK_TIMEOUT_MS` (500 ms, see `esp_now_link.h`)
-it engages failsafe: throttle to minimum, throttle lock disarmed, and the SBUS
-`failsafe` flag is set until the link recovers.
+The GUI sends the current controls to the transmitter every 100 ms. If those
+host packets stop for 500 ms, the transmitter locks CH8 and marks its ESP-NOW
+packet as failsafe. The receiver then sets the SBUS `failsafe` flag even though
+the ESP-NOW radio link is still alive. After a host timeout, the transmitter
+must receive CH8 locked once before it will accept another unlock command.
+When the GUI receives this failsafe report, it stops any running benchmark,
+synchronizes its CH8 control to locked, and displays instructions for checking
+the robot before deliberately unlocking again.
+
+Separately, the transmitter resends its current state over ESP-NOW every ~50
+ms. If the receiver hears nothing for `LINK_TIMEOUT_MS` (500 ms, see
+`esp_now_link.h`), it sets throttle to minimum, locks CH8, and sets the SBUS
+`failsafe` flag until the wireless link recovers.

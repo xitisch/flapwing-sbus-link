@@ -50,6 +50,7 @@ uint16_t userChannels[16];
 // Link-state, updated from the ESP-NOW receive callback
 volatile uint32_t lastPacketMs = 0;
 volatile bool linkActive = false;
+volatile bool remoteFailsafe = true;
 volatile bool packetReceived = false;
 
 // Safe channel values: used at startup and when the link is lost.
@@ -71,6 +72,7 @@ void handlePacket(const uint8_t *data, int len) {
   for (int i = 0; i < 16; i++) {
     userChannels[i] = constrain(packet.ch[i], 1000, 2000);
   }
+  remoteFailsafe = packet.failsafe != 0;
   lastPacketMs = millis();
   linkActive = true;
   packetReceived = true;
@@ -119,6 +121,7 @@ void loop() {
   // Failsafe: if the link goes quiet, force the safe channel values
   if (linkActive && (millis() - lastPacketMs > LINK_TIMEOUT_MS)) {
     linkActive = false;
+    remoteFailsafe = true;
     applyFailsafe();
     Serial.println("Link lost - failsafe engaged");
   }
@@ -139,7 +142,8 @@ void loop() {
       Serial.print(" CH3=");               Serial.print(userChannels[2]);
       Serial.print(" CH5=");               Serial.print(userChannels[4]);
       Serial.print(" CH6=");               Serial.print(userChannels[5]);
-      Serial.print(" CH8=");               Serial.println(userChannels[7]);
+      Serial.print(" CH8=");               Serial.print(userChannels[7]);
+      Serial.print(" FAILSAFE=");          Serial.println(remoteFailsafe ? "YES" : "NO");
     }
 #else
     // Normal debug behavior: print only when one of the used channels changes.
@@ -171,7 +175,8 @@ void loop() {
     sbusData.ch[i] = map(userChannels[i], 1000, 2000, 172, 1811);
   }
   sbusData.lost_frame = false;
-  sbusData.failsafe   = !linkActive;
+  // Report either a broken ESP-NOW link or a transmitter-side GUI timeout.
+  sbusData.failsafe   = !linkActive || remoteFailsafe;
   sbusData.ch17       = false;
   sbusData.ch18       = false;
 

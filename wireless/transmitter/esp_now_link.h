@@ -15,11 +15,12 @@
 
 #include <stdint.h>
 
-// Channel payload sent over ESP-NOW. Values are in microseconds [1000, 2000].
-// 16 channels mirror the SBUS frame; unused channels carry their neutral/safe
-// defaults filled in by the transmitter.
+// Payload sent over ESP-NOW. Channel values are in microseconds [1000, 2000].
+// The failsafe byte lets the transmitter report loss of its host GUI while the
+// ESP-NOW radio link itself is still working.
 typedef struct __attribute__((packed)) {
   uint16_t ch[16];
+  uint8_t failsafe;
 } SbusPacket;
 
 // Both ESP-NOW nodes must use the same 2.4 GHz Wi-Fi channel.

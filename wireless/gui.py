@@ -16,12 +16,15 @@ Usage:
 """
 
 import tkinter as tk
-from tkinter import ttk
+from tkinter import messagebox, ttk
 import serial
 import serial.tools.list_ports
 import time
 
 BAUD_RATE = 115200
+GUI_HEARTBEAT_MS = 100
+THROTTLE_RAMP_RATE = 250.0       # channel units per second
+THROTTLE_RAMP_INTERVAL_MS = 50
 TEST_STEP_MS = 8000
 TEST_BREAK_MS = 5000
 TEST_START_MS = 5000
@@ -59,6 +62,10 @@ WIRELESS_TEST_STEPS = (
 WIRELESS_TEST_FINAL_VALUES = {"ch1": 1500, "ch2": 1500, "ch3": 1000, "ch8": 1000}
 
 suppress_slider_send = False
+wireless_test_running = False
+wireless_test_after_id = None
+throttle_ramp_after_id = None
+failsafe_warning_shown = False
 
 # USB-serial chip substrings found in ESP32/Arduino port descriptions
 _KNOWN_CHIPS = ('cp210', 'ch340', 'ch341', 'ftdi', 'uart', 'arduino', 'esp')
@@ -120,7 +127,7 @@ except Exception as e:
     ser = None
 
 
-def send_channels(*_):
+def send_channels(*_, update_status=True):
     """Read the five sliders plus the CH8 toggle and send one packet to the ESP32."""
     if not (ser and ser.is_open):
         return
@@ -139,11 +146,70 @@ def send_channels(*_):
     cmd = f"<{ch1},{ch2},{ch3},{ch5},{ch6},{ch8}>\n"
     try:
         ser.write(cmd.encode('utf-8'))
-        label_status.config(text=f"Sent: {cmd.strip()}", fg="green")
+        if update_status:
+            label_status.config(text=f"Sent: {cmd.strip()}", fg="green")
         return True
     except Exception:
-        label_status.config(text="Send failed", fg="red")
+        if update_status:
+            label_status.config(text="Send failed", fg="red")
         return False
+
+
+def gui_heartbeat():
+    """Keep the transmitter informed that the host GUI is still responsive."""
+    send_channels(update_status=False)
+    root.after(GUI_HEARTBEAT_MS, gui_heartbeat)
+
+
+def show_failsafe_warning():
+    """Synchronize CH8 to locked and explain how to resume safely."""
+    global failsafe_warning_shown
+
+    if failsafe_warning_shown:
+        return
+    failsafe_warning_shown = True
+
+    if wireless_test_running:
+        abort_wireless_test()
+    else:
+        ch8_var.set(1000)
+        refresh_ch8_button()
+        send_channels(update_status=False)
+
+    label_status.config(
+        text="FAILSAFE: CH8 locked. Verify the robot is safe before unlocking.",
+        fg="red")
+    messagebox.showwarning(
+        "Failsafe Engaged",
+        "The transmitter stopped receiving GUI heartbeat packets and engaged "
+        "failsafe. CH8 has been synchronized to LOCKED / DISARMED.\n\n"
+        "Before resuming:\n"
+        "1. Verify that the robot and surrounding area are safe.\n"
+        "2. Confirm the CH8 button says LOCKED - DISARMED.\n"
+        "3. Click the CH8 button once to unlock only when you are ready.\n\n"
+        "Any running wireless benchmark has been stopped.")
+
+
+def poll_transmitter_status():
+    """Read transmitter status messages without blocking the Tkinter loop."""
+    global failsafe_warning_shown
+
+    if ser and ser.is_open:
+        try:
+            while ser.in_waiting:
+                line = ser.readline().decode('utf-8', errors='replace').strip()
+                if "GUI connection lost - CH8 locked and failsafe engaged" in line:
+                    show_failsafe_warning()
+                elif "GUI connection restored - failsafe cleared" in line:
+                    failsafe_warning_shown = False
+                    label_status.config(
+                        text="Failsafe cleared: CH8 is locked; unlock only when ready.",
+                        fg="green")
+        except Exception:
+            # The transmitter timeout remains the authority if the serial port
+            # disappears while the GUI is running.
+            pass
+    root.after(50, poll_transmitter_status)
 
 
 def create_slider(label_text, default_val, min_val=1000, max_val=2000,
@@ -214,6 +280,9 @@ def refresh_ch8_button():
                        bg="#c62828", activebackground="#c62828", fg="white")
 
 def toggle_ch8():
+    if wireless_test_running:
+        abort_wireless_test()
+        return
     ch8_var.set(1000 if ch8_var.get() == 2000 else 2000)
     refresh_ch8_button()
     send_channels()
@@ -223,7 +292,7 @@ def set_slider_value(slider, value):
     slider.value_var.set(str(value))
     slider.set(value)
 
-def apply_channel_values(values):
+def apply_channel_values(values, update_status=True):
     """Apply channel values and send one complete packet to the ESP32."""
     global suppress_slider_send
 
@@ -245,28 +314,127 @@ def apply_channel_values(values):
     finally:
         suppress_slider_send = False
 
-    return send_channels()
+    return send_channels(update_status=update_status)
+
+
+def ramp_test_throttle(target, step_text, on_complete):
+    """Ramp CH3 at THROTTLE_RAMP_RATE without blocking the Tkinter loop."""
+    global throttle_ramp_after_id
+
+    start_value = int(slider_ch3.get())
+    target = max(1000, min(2000, int(target)))
+    if start_value == target:
+        throttle_ramp_after_id = None
+        on_complete()
+        return
+
+    direction = 1 if target > start_value else -1
+    start_time = time.monotonic()
+
+    def update_ramp():
+        global throttle_ramp_after_id
+
+        if not wireless_test_running:
+            throttle_ramp_after_id = None
+            return
+
+        elapsed_seconds = time.monotonic() - start_time
+        distance = int(THROTTLE_RAMP_RATE * elapsed_seconds)
+        new_value = start_value + direction * distance
+        if direction > 0:
+            new_value = min(new_value, target)
+        else:
+            new_value = max(new_value, target)
+
+        apply_channel_values({"ch3": new_value}, update_status=False)
+        label_status.config(
+            text=f"Wireless test ramping at 250 units/s: {step_text} (CH3={new_value})",
+            fg="blue")
+
+        if new_value == target:
+            throttle_ramp_after_id = None
+            on_complete()
+        else:
+            throttle_ramp_after_id = root.after(
+                THROTTLE_RAMP_INTERVAL_MS, update_ramp)
+
+    update_ramp()
+
+
+def finish_wireless_test():
+    """Ramp to minimum normally, then lock CH8 and restore neutral controls."""
+    def lock_and_finish():
+        global wireless_test_running
+
+        apply_channel_values(WIRELESS_TEST_FINAL_VALUES, update_status=False)
+        wireless_test_running = False
+        label_status.config(
+            text="Wireless test complete: throttle minimum and CH8 locked",
+            fg="green")
+        wireless_test_btn.config(text="Run Wireless Communications Test")
+
+    ramp_test_throttle(1000, "returning throttle to minimum", lock_and_finish)
+
 
 def run_wireless_test(step_index=0):
     """Run the butterfly wireless test without blocking the Tkinter loop."""
-    if step_index == 0:
-        wireless_test_btn.config(state='disabled', text="Wireless Test Running...")
+    global wireless_test_after_id
 
+    wireless_test_after_id = None
+    if not wireless_test_running:
+        return
     if step_index >= len(WIRELESS_TEST_STEPS):
-        apply_channel_values(WIRELESS_TEST_FINAL_VALUES)
-        label_status.config(text="Wireless test complete: controls returned to safe neutral",
-                            fg="green")
-        wireless_test_btn.config(state='normal', text="Run Wireless Communications Test")
+        finish_wireless_test()
         return
 
     step_text, duration_ms, values = WIRELESS_TEST_STEPS[step_index]
-    sent = apply_channel_values(values)
-    if sent:
-        label_status.config(text=f"Wireless test: {step_text}", fg="blue")
-    else:
-        label_status.config(text=f"Wireless test queued locally: {step_text}", fg="orange")
+    immediate_values = dict(values)
+    throttle_target = immediate_values.pop("ch3", None)
+    sent = apply_channel_values(immediate_values, update_status=False)
 
-    root.after(duration_ms, lambda: run_wireless_test(step_index + 1))
+    def hold_step():
+        global wireless_test_after_id
+
+        if not wireless_test_running:
+            return
+        colour = "blue" if sent else "orange"
+        label_status.config(text=f"Wireless test holding: {step_text}", fg=colour)
+        wireless_test_after_id = root.after(
+            duration_ms, lambda: run_wireless_test(step_index + 1))
+
+    if throttle_target is None:
+        hold_step()
+    else:
+        ramp_test_throttle(throttle_target, step_text, hold_step)
+
+
+def abort_wireless_test():
+    """Stop the benchmark immediately by locking CH8; CH3 may retain its value."""
+    global wireless_test_running, wireless_test_after_id, throttle_ramp_after_id
+
+    wireless_test_running = False
+    if wireless_test_after_id is not None:
+        root.after_cancel(wireless_test_after_id)
+        wireless_test_after_id = None
+    if throttle_ramp_after_id is not None:
+        root.after_cancel(throttle_ramp_after_id)
+        throttle_ramp_after_id = None
+
+    apply_channel_values({"ch8": 1000}, update_status=False)
+    label_status.config(text="Wireless test stopped: CH8 locked", fg="red")
+    wireless_test_btn.config(text="Run Wireless Communications Test")
+
+
+def toggle_wireless_test():
+    global wireless_test_running
+
+    if wireless_test_running:
+        abort_wireless_test()
+        return
+
+    wireless_test_running = True
+    wireless_test_btn.config(text="STOP Wireless Test")
+    run_wireless_test(0)
 
 ch8_btn = tk.Button(root, command=toggle_ch8, font=("Arial", 13, "bold"),
                     height=2, relief="raised", bd=3)
@@ -275,7 +443,7 @@ refresh_ch8_button()
 
 # --- Butterfly wireless communications test: timed channel sweep ---
 wireless_test_btn = tk.Button(root, text="Run Wireless Communications Test",
-                              command=run_wireless_test,
+                              command=toggle_wireless_test,
                               font=("Arial", 11, "bold"), height=2,
                               relief="raised", bd=2)
 wireless_test_btn.pack(fill='x', padx=20, pady=(0, 14))
@@ -309,6 +477,19 @@ port_text = SERIAL_PORT if SERIAL_PORT else "No port"
 label_status = tk.Label(root, text=f"Connected: {port_text}", bd=1, relief='sunken', anchor='w')
 label_status.pack(side='bottom', fill='x', padx=10, pady=10)
 
+
+def close_gui():
+    """Lock CH8 before closing; the transmitter timeout is the backup."""
+    if wireless_test_running:
+        abort_wireless_test()
+    else:
+        apply_channel_values({"ch8": 1000}, update_status=False)
+    root.destroy()
+
+
+root.protocol("WM_DELETE_WINDOW", close_gui)
+root.after(0, gui_heartbeat)  # send the initial locked state before user input
+root.after(50, poll_transmitter_status)
 root.mainloop()
 
 # Release the port after the window closes
