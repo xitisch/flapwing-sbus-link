@@ -112,9 +112,6 @@ any payload-format change.
 | GPIO4              | SBUS input        |
 | GND                | GND               |
 
-GPIO4 is driven directly as an inverted 3.3 V SBUS signal. Do not use the old
-DevKitV1 GPIO17 wiring with the SuperMini; GPIO17 is not exposed for this use on
-the C3 board.
 
 ### Build & flash (Arduino IDE)
 
@@ -129,8 +126,7 @@ the C3 board.
    `RECEIVER_MAC` in `wireless/transmitter/transmitter.ino` with the address
    printed in step 3.
 5. Open `wireless/transmitter/transmitter.ino`, select **ESP32 Dev Module**, and
-   flash the PC-tethered node. **DOIT ESP32 DEVKIT V1** also works if that entry
-   is available. Close its Serial Monitor afterward so the GUI can claim the
+   flash the PC-tethered node. Close its Serial Monitor afterward so the GUI can claim the
    port.
 
 If a SuperMini upload does not start, hold **BOOT**, tap **RESET**, begin the
