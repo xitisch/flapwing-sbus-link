@@ -10,8 +10,10 @@ variants of the link:
   transmitter, which relays the channels wirelessly to an ESP32-C3 SuperMini
   receiver on the robot that outputs the SBUS signal.
 
-Both variants speak the same host protocol, so `gui.py` is functionally
-identical in each: it sends `<CH1,CH2,CH3,CH5,CH6,CH8>` over USB serial.
+Both variants use the same host packet format:
+`<CH1,CH2,CH3,CH5,CH6,CH8>`. The wireless GUI additionally provides the
+automated ramped benchmark, GUI heartbeat, host-failsafe warning, and immediate
+benchmark stop control.
 
 ```
             wired/                                 wireless/
@@ -41,7 +43,7 @@ identical in each: it sends `<CH1,CH2,CH3,CH5,CH6,CH8>` over USB serial.
 │   │   ├── receiver.ino          # ESP-NOW -> SBUS output  (robot node)
 │   │   ├── esp_now_link.h        # identical copy of the payload definition
 │   │   └── platformio.ini        # ESP32-C3 SuperMini receiver build
-│   └── gui.py                    # Tkinter slider GUI (same as wired/gui.py)
+│   └── gui.py                    # wireless control and benchmark GUI
 ├── README.md
 └── .gitignore
 ```
@@ -52,7 +54,7 @@ identical in each: it sends `<CH1,CH2,CH3,CH5,CH6,CH8>` over USB serial.
 
 ## Channels (both variants)
 
-| Value sent | SBUS index | Channel | Function            | Safe default |
+| Packet field | SBUS index | Channel | Function            | Safe default |
 |------------|-----------:|---------|---------------------|-------------:|
 | 1          | 0          | CH1     | Yaw                 | 1500         |
 | 2          | 1          | CH2     | Pitch               | 1500         |
@@ -61,15 +63,18 @@ identical in each: it sends `<CH1,CH2,CH3,CH5,CH6,CH8>` over USB serial.
 | 5          | 5          | CH6     | Trim 2              | 1500         |
 | 6          | 7          | CH8     | Throttle lock / arm | 1000 (locked) |
 
-All values are in microseconds, range `[1000, 2000]`. CH8 is controlled by the
-GUI's throttle-lock toggle and starts locked/disarmed.
+Host channel values use the conventional RC range `[1000, 2000]`, with `1500`
+as center. They are numeric control values, not physical PWM pulses; the
+SBUS-output firmware maps them to SBUS counts. CH8 uses `1000` for
+locked/disarmed and `2000` for unlocked/armed, and starts locked.
 
 ## Common setup
 
-- Install the **ESP32 Arduino core** (Boards Manager) and the
+- For Arduino IDE, install the **ESP32 Arduino core** (Boards Manager) and the
   **bolderflight/sbus** library (Library Manager). `esp_now` and `WiFi` ship
-  with the ESP32 core.
-- `pip install pyserial` for the GUI.
+  with the ESP32 core. PlatformIO installs the pinned dependencies from each
+  project's `platformio.ini`.
+- Install Python 3 and run `python -m pip install pyserial` for the GUI.
 - SBUS is inverted, 100kbaud / 8E2. The wired firmware outputs it on
   **GPIO17**; the wireless ESP32-C3 receiver outputs it on **GPIO4**. Always
   connect the MCU and flight-controller grounds.
@@ -95,8 +100,10 @@ channel; moving a slider sends a packet that the ESP32 converts straight to SBUS
 ## Wireless variant (`wireless/`)
 
 Two boards linked over ESP-NOW: an ESP32 DevKitV1 transmitter connected to the
-PC and an ESP32-C3 SuperMini receiver mounted on the robot. The ESP-NOW payload
-is unchanged, so the two different ESP32 chips remain wirelessly compatible.
+PC and an ESP32-C3 SuperMini receiver mounted on the robot. Their shared packed
+payload contains 16 channel values plus a host-failsafe byte. Both copies of
+`esp_now_link.h` must remain identical, and both boards must be reflashed after
+any payload-format change.
 
 ### Receiver wiring
 
@@ -113,48 +120,53 @@ the C3 board.
 
 1. Install the Espressif **ESP32 Arduino core** and **Bolder Flight Systems
    SBUS 8.1.4** from Library Manager.
-2. Open `wireless/receiver/receiver.ino`. Select **Nologo ESP32C3 Super Mini**
-   if your installed core provides it; otherwise select **ESP32C3 Dev Module**.
-   Set **USB CDC On Boot** to **Enabled**, then flash the receiver.
+2. Open `wireless/receiver/receiver.ino`, select **ESP32C3 Dev Module**, enable
+   **USB CDC On Boot**, and flash the receiver.
 3. Open the receiver's Serial Monitor at 115200 baud. It should print
    `Receiver MAC`, `SBUS output: GPIO4`, and `ESP-NOW receiver ready`.
 4. The transmitter now uses the broadcast address by default, so it works with
    the new C3 without editing a MAC. To restrict it to one receiver, replace
    `RECEIVER_MAC` in `wireless/transmitter/transmitter.ino` with the address
    printed in step 3.
-5. Open `wireless/transmitter/transmitter.ino`, select **DOIT ESP32 DEVKIT V1**,
-   and flash the PC-tethered node. Close its Serial Monitor afterward so the GUI
-   can claim the port.
+5. Open `wireless/transmitter/transmitter.ino`, select **ESP32 Dev Module**, and
+   flash the PC-tethered node. **DOIT ESP32 DEVKIT V1** also works if that entry
+   is available. Close its Serial Monitor afterward so the GUI can claim the
+   port.
 
 If a SuperMini upload does not start, hold **BOOT**, tap **RESET**, begin the
 upload, and release **BOOT** when the IDE starts connecting.
 
 ### Build & flash (PlatformIO)
 
-Each wireless node is an independent PlatformIO project. The receiver project
-uses the generic 4 MB ESP32-C3 target, enables native USB CDC, pins the
-toolchain, and installs the SBUS library automatically.
+Each wireless node is an independent PlatformIO project. The receiver uses the
+generic `esp32-c3-devkitm-1` target with native USB CDC; the transmitter uses
+`esp32doit-devkit-v1`.
 
-Build, upload, and monitor the ESP32-C3 SuperMini receiver:
+In VS Code, use **File -> Open Folder** and open only the node you want to
+flash:
 
-```bash
-python -m pip install platformio
-python -m platformio run --project-dir wireless/receiver
-python -m platformio run --project-dir wireless/receiver --target upload --upload-port COMx
-python -m platformio device monitor --project-dir wireless/receiver --baud 115200 --port COMx
+- `wireless/receiver` for the ESP32-C3 SuperMini receiver.
+- `wireless/transmitter` for the ESP32 DevKitV1 transmitter.
+
+PowerShell upload commands from the repository root:
+
+```powershell
+# Receiver (currently COM11)
+cd wireless\receiver
+pio run --target upload --upload-port COM11
+
+# Transmitter (currently COM10)
+cd ..\transmitter
+pio run --target upload --upload-port COM10
 ```
 
-Replace `COMx` with the SuperMini's port. PlatformIO's generic
-`esp32-c3-devkitm-1` target is intentional; its official registry does not have
-a separate SuperMini board definition.
+PlatformIO can auto-detect the upload port when only one board is connected, so
+`--upload-port COMx` may be omitted when only one board is connected. With both
+connected, use `pio device list` and specify the port; Windows may change COM
+numbers after reconnecting a board.
 
-Build the DevKitV1 transmitter from its own project:
-
-```bash
-python -m platformio run --project-dir wireless/transmitter
-python -m platformio run --project-dir wireless/transmitter --target upload --upload-port COMx
-python -m platformio device monitor --project-dir wireless/transmitter --baud 115200 --port COMx
-```
+Only one program can open a COM port at a time. Close the transmitter Serial
+Monitor before starting the GUI.
 
 ### Run the GUI
 
@@ -162,28 +174,22 @@ python -m platformio device monitor --project-dir wireless/transmitter --baud 11
 python wireless/gui.py
 ```
 
-The GUI auto-detects the transmitter's USB-serial port (prompting if several
-candidates are found) and exposes a slider per channel. Moving a slider sends a
-packet to the transmitter, which forwards it over ESP-NOW. The automated
-wireless benchmark ramps CH3 at 250 channel units per second; ordinary manual
-slider changes remain immediate. While the benchmark runs, its button becomes
-an immediate stop button that locks CH8.
+The GUI auto-detects the transmitter port; if prompted, select the DevKitV1
+CP210x port (currently COM10). Manual control changes are sent immediately. The
+automated benchmark ramps CH3 at 250 units per second; its stop button cancels
+the test and locks CH8 immediately.
 
 Both nodes explicitly use Wi-Fi channel 1. If you change
 `ESPNOW_WIFI_CHANNEL`, update both copies of `esp_now_link.h`.
 
 ### Failsafe
 
-The GUI sends the current controls to the transmitter every 100 ms. If those
-host packets stop for 500 ms, the transmitter locks CH8 and marks its ESP-NOW
-packet as failsafe. The receiver then sets the SBUS `failsafe` flag even though
-the ESP-NOW radio link is still alive. After a host timeout, the transmitter
-must receive CH8 locked once before it will accept another unlock command.
-When the GUI receives this failsafe report, it stops any running benchmark,
-synchronizes its CH8 control to locked, and displays instructions for checking
-the robot before deliberately unlocking again.
+- If GUI packets stop for 500 ms, the transmitter preserves CH3, locks CH8,
+  and sets the SBUS failsafe flag. If the GUI remains connected to the
+  transmitter, it displays a warning and requires the locked state before the
+  user can deliberately unlock again.
+- If the ESP-NOW link is lost for 500 ms, the receiver sets CH3 to minimum,
+  locks CH8, and sets the SBUS failsafe flag.
 
-Separately, the transmitter resends its current state over ESP-NOW every ~50
-ms. If the receiver hears nothing for `LINK_TIMEOUT_MS` (500 ms, see
-`esp_now_link.h`), it sets throttle to minimum, locks CH8, and sets the SBUS
-`failsafe` flag until the wireless link recovers.
+The ESP-NOW link is one-way, so receiver-side link loss is visible through the
+receiver monitor or flight-controller status rather than the GUI.

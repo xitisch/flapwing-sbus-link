@@ -38,7 +38,7 @@ void setup() {
   userChannels[2] = 1000;  // CH3: throttle (minimum — do not arm at neutral)
   userChannels[4] = 1500;  // CH5: trim 1  (neutral)
   userChannels[5] = 1500;  // CH6: trim 2  (neutral)
-  userChannels[7] = 1800;  // CH8: throttle lock (armed position)
+  userChannels[7] = 1000;  // CH8: throttle lock (locked / disarmed)
 }
 
 void loop() {

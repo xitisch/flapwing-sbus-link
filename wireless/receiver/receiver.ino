@@ -29,7 +29,7 @@ bfs::SbusTx sbus(&Serial1, -1, SBUS_TX_PIN, true);
 
 // ==================== RECEIVER VALUE TEST ====================
 // Comment out the next line after testing to disable continuous test output.
-#define RECEIVER_VALUE_TEST
+// #define RECEIVER_VALUE_TEST
 
 #ifdef RECEIVER_VALUE_TEST
 static constexpr uint32_t RECEIVER_VALUE_TEST_INTERVAL_MS = 250;
