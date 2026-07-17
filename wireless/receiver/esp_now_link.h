@@ -23,6 +23,22 @@ typedef struct __attribute__((packed)) {
   uint8_t failsafe;
 } SbusPacket;
 
+// Receiver-to-transmitter telemetry. battery_adc_raw is deliberately left as
+// an unscaled 12-bit ADC reading; voltage and state-of-charge conversion belong
+// to the future battery-sense hardware and GUI work.
+typedef struct __attribute__((packed)) {
+  uint32_t magic;
+  uint32_t packets_received;
+  uint16_t battery_adc_raw;
+  uint8_t version;
+  uint8_t link_active;
+  uint8_t failsafe;
+} ReceiverStatusPacket;
+
+static const uint32_t RECEIVER_STATUS_MAGIC = 0x46575354UL;  // FWST
+static const uint8_t RECEIVER_STATUS_VERSION = 1;
+static const uint32_t RECEIVER_STATUS_INTERVAL_MS = 250;
+
 // Both ESP-NOW nodes must use the same 2.4 GHz Wi-Fi channel.
 static const uint8_t ESPNOW_WIFI_CHANNEL = 1;
 

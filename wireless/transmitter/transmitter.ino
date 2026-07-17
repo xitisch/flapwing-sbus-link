@@ -23,6 +23,7 @@
  */
 
 #include <esp_now.h>
+#include <esp_arduino_version.h>
 #include <esp_wifi.h>
 #include <WiFi.h>
 #include "esp_now_link.h"
@@ -42,6 +43,73 @@ uint32_t lastSendMs = 0;
 uint32_t lastHostPacketMs = 0;
 bool hostPacketSeen = false;
 bool hostFailsafe = true;
+
+// ESP-NOW changed its receive callback's first parameter in Arduino-ESP32 3.x.
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+using EspNowRecvInfo = esp_now_recv_info_t;
+#else
+using EspNowRecvInfo = uint8_t;
+#endif
+
+portMUX_TYPE receiverStatusMux = portMUX_INITIALIZER_UNLOCKED;
+ReceiverStatusPacket pendingReceiverStatus = {};
+uint8_t pendingReceiverStatusMac[6] = {};
+volatile bool receiverStatusPending = false;
+
+const uint8_t *sourceMac(const EspNowRecvInfo *info) {
+#if ESP_ARDUINO_VERSION >= ESP_ARDUINO_VERSION_VAL(3, 0, 0)
+  return info->src_addr;
+#else
+  return info;
+#endif
+}
+
+void onDataRecv(const EspNowRecvInfo *info, const uint8_t *data, int len) {
+  if (len != sizeof(ReceiverStatusPacket)) {
+    return;
+  }
+
+  ReceiverStatusPacket status;
+  memcpy(&status, data, sizeof(status));
+  if (status.magic != RECEIVER_STATUS_MAGIC) {
+    return;
+  }
+  if (status.version != RECEIVER_STATUS_VERSION) {
+    return;
+  }
+
+  portENTER_CRITICAL(&receiverStatusMux);
+  pendingReceiverStatus = status;
+  memcpy(pendingReceiverStatusMac, sourceMac(info), 6);
+  receiverStatusPending = true;
+  portEXIT_CRITICAL(&receiverStatusMux);
+}
+
+void printReceiverStatus() {
+  ReceiverStatusPacket status;
+  uint8_t source[6];
+  bool pending = false;
+
+  portENTER_CRITICAL(&receiverStatusMux);
+  if (receiverStatusPending) {
+    status = pendingReceiverStatus;
+    memcpy(source, pendingReceiverStatusMac, 6);
+    receiverStatusPending = false;
+    pending = true;
+  }
+  portEXIT_CRITICAL(&receiverStatusMux);
+
+  if (!pending) {
+    return;
+  }
+
+  Serial.printf(
+      "RECEIVER_STATUS mac=%02X:%02X:%02X:%02X:%02X:%02X packets=%lu "
+      "link=%u failsafe=%u battery_raw=%u\n",
+      source[0], source[1], source[2], source[3], source[4], source[5],
+      static_cast<unsigned long>(status.packets_received), status.link_active,
+      status.failsafe, status.battery_adc_raw);
+}
 
 void sendChannels() {
   SbusPacket packet;
@@ -128,6 +196,8 @@ void setup() {
     return;
   }
 
+  esp_now_register_recv_cb(onDataRecv);
+
   // Register the receiver (or broadcast address) as a peer
   esp_now_peer_info_t peer = {};
   memcpy(peer.peer_addr, RECEIVER_MAC, 6);
@@ -141,6 +211,8 @@ void setup() {
 }
 
 void loop() {
+  printReceiverStatus();
+
   if (Serial.available()) {
     String command = Serial.readStringUntil('\n');
     command.trim();

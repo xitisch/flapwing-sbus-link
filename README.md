@@ -101,9 +101,9 @@ channel; moving a slider sends a packet that the ESP32 converts straight to SBUS
 
 Two boards linked over ESP-NOW: an ESP32 DevKitV1 transmitter connected to the
 PC and an ESP32-C3 SuperMini receiver mounted on the robot. Their shared packed
-payload contains 16 channel values plus a host-failsafe byte. Both copies of
-`esp_now_link.h` must remain identical, and both boards must be reflashed after
-any payload-format change.
+header defines the forward channel packet and a reverse receiver-status packet.
+Both copies of `esp_now_link.h` must remain identical, and both boards must be
+reflashed after any payload-format change.
 
 ### Receiver wiring
 
@@ -112,6 +112,18 @@ any payload-format change.
 | GPIO4              | SBUS input        |
 | GND                | GND               |
 
+GPIO3 is reserved as the future battery-sense ADC input. The current firmware
+sends its raw 12-bit reading (`0` to `4095`) back to the transmitter without
+converting it to volts or battery percentage. An unconnected GPIO3 floats, so
+its value is meaningless until the battery-sense circuit is installed. Never
+connect a battery directly to GPIO3; use a correctly designed voltage divider
+and ensure the ADC pin voltage remains within the ESP32-C3 input limit.
+
+At receiver startup, GPIO4 remains a high-impedance input and no SBUS frames are
+sent for five seconds. The receiver then enables UART1, immediately sends a safe
+raw SBUS frame (neutral `992`, CH3 and CH8 minimum `172`), and continues at
+approximately 10 ms per frame. Incoming ESP-NOW channel values are converted to
+raw SBUS counts when received.
 
 ### Build & flash (Arduino IDE)
 
@@ -178,6 +190,20 @@ the test and locks CH8 immediately.
 Both nodes explicitly use Wi-Fi channel 1. If you change
 `ESPNOW_WIFI_CHANNEL`, update both copies of `esp_now_link.h`.
 
+### Reverse receiver status
+
+After receiving the first valid channel packet, the receiver learns the
+transmitter's MAC address and sends it a status packet every 250 ms. The
+transmitter reports it over USB serial in this form:
+
+```text
+RECEIVER_STATUS mac=... packets=123 link=1 failsafe=0 battery_raw=2048
+```
+
+`battery_raw` is only a raw ADC sample for now. The GUI is unchanged and does
+not yet display or convert this value; use the transmitter Serial Monitor for
+testing (with the GUI closed, because they cannot share the same COM port).
+
 ### Failsafe
 
 - If GUI packets stop for 500 ms, the transmitter preserves CH3, locks CH8,
@@ -187,5 +213,5 @@ Both nodes explicitly use Wi-Fi channel 1. If you change
 - If the ESP-NOW link is lost for 500 ms, the receiver sets CH3 to minimum,
   locks CH8, and sets the SBUS failsafe flag.
 
-The ESP-NOW link is one-way, so receiver-side link loss is visible through the
-receiver monitor or flight-controller status rather than the GUI.
+Receiver status is returned to the transmitter, but the current GUI does not
+yet display receiver-side link state or battery data.
